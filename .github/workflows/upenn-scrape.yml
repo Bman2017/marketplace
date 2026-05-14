@@ -66,3 +66,5 @@ jobs:
             git commit -m "Add UPenn technology listing scrape outputs"
             git push
           fi
+
+# trigger-refresh: 2026-05-14
