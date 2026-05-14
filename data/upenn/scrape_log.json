@@ -1,0 +1,20 @@
+{
+  "base_url": "https://upenn.technologypublisher.com/",
+  "rss_url": "https://upenn.technologypublisher.com/rss.aspx",
+  "started_at_unix": 1778800358.389898,
+  "errors": [],
+  "methods": [
+    {
+      "method": "rss",
+      "count": 439
+    }
+  ],
+  "algolia_config": {
+    "index_name": "Test_Inteum_Tech_Publisher_PCI"
+  },
+  "discovered_url_count": 439,
+  "record_count": 439,
+  "ok_count": 439,
+  "error_count": 0,
+  "finished_at_unix": 1778800627.3719118
+}
