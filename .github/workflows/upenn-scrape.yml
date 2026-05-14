@@ -6,6 +6,10 @@ on:
     paths:
       - 'scripts/upenn_scrape.py'
       - '.github/workflows/upenn-scrape.yml'
+  pull_request:
+    paths:
+      - 'scripts/upenn_scrape.py'
+      - '.github/workflows/upenn-scrape.yml'
 
 permissions:
   contents: write
@@ -56,6 +60,7 @@ jobs:
             data/upenn/scrape_log.json
 
       - name: Commit scrape outputs
+        if: github.event_name != 'pull_request'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -67,4 +72,4 @@ jobs:
             git push
           fi
 
-# trigger-refresh: 2026-05-14
+# trigger-refresh: 2026-05-14-pr-enabled
