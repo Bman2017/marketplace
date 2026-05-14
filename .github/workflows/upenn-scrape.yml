@@ -1,0 +1,68 @@
+name: UPenn Technology Publisher Scrape
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'scripts/upenn_scrape.py'
+      - '.github/workflows/upenn-scrape.yml'
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 lxml openpyxl
+
+      - name: Run UPenn scraper
+        run: |
+          python scripts/upenn_scrape.py --output-dir data/upenn --delay 0.35
+
+      - name: Print scrape summary
+        run: |
+          cat data/upenn/scrape_log.json
+          python - <<'PY'
+          import csv, pathlib
+          p = pathlib.Path('data/upenn/upenn_technology_listings.csv')
+          with p.open(newline='', encoding='utf-8') as f:
+              print('CSV rows:', sum(1 for _ in csv.DictReader(f)))
+          PY
+
+      - name: Upload scrape outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: upenn-technology-listings
+          path: |
+            data/upenn/upenn_technology_listings.xlsx
+            data/upenn/upenn_technology_listings.csv
+            data/upenn/upenn_technology_listings.jsonl
+            data/upenn/discovered_urls.txt
+            data/upenn/scrape_log.json
+
+      - name: Commit scrape outputs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/upenn/
+          if git diff --cached --quiet; then
+            echo "No scrape output changes to commit."
+          else
+            git commit -m "Add UPenn technology listing scrape outputs"
+            git push
+          fi
