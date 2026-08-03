@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - .github/workflows/ucop-one-time-export.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/ucop-one-time-export.yml
 
 permissions:
   contents: read
@@ -87,7 +91,6 @@ jobs:
                   records.append({"tech_id": tech_id, "title": title, "campus": campus})
 
               if len(records) < 3000:
-                  # Fallback for alternate markup: pair Tech ID text with the next NCD-linked title.
                   pattern = re.compile(
                       r"(?:Tech\s*ID[^0-9]{0,100})?(\d{4,6}).{0,1500}?href=[\"'][^\"']*/NCD/\1\.html[^\"']*[\"'][^>]*>(.*?)</a>",
                       re.I | re.S,
@@ -106,7 +109,6 @@ jobs:
           (OUT / "ucop_tech_index_raw.html").write_text(html, encoding="utf-8")
           records = parse_records(html)
 
-          # Attempt campus assignment through the catalog's campus-filtered public views.
           campus_codes = {
               "BK": "University of California, Berkeley",
               "DA": "University of California, Davis",
