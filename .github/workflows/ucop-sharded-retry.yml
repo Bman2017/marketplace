@@ -1,0 +1,191 @@
+name: UCOP Sharded Detail Retry
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/ucop-sharded-retry.yml
+
+permissions:
+  contents: read
+
+jobs:
+  enrich:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check requests beautifulsoup4
+      - name: Fetch UCOP detail shard
+        env:
+          SHARD: ${{ matrix.shard }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import csv, json, os, re, time
+          from datetime import datetime, timezone
+          from pathlib import Path
+          import requests
+          from bs4 import BeautifulSoup, Tag
+
+          BASE = 'https://techtransfer.universityofcalifornia.edu'
+          INDEX_URL = f'{BASE}/Tech'
+          SHARD = int(os.environ['SHARD'])
+          OUT = Path('out')
+          OUT.mkdir(exist_ok=True)
+          session = requests.Session()
+          session.headers.update({
+              'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/151 Safari/537.36',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+              'Accept-Language': 'en-US,en;q=0.9',
+              'Referer': INDEX_URL,
+          })
+
+          CAMPUS_CODES = {
+              'BK':'University of California, Berkeley',
+              'DA':'University of California, Davis',
+              'IR':'University of California, Irvine',
+              'LA':'University of California, Los Angeles',
+              'MC':'University of California, Merced',
+              'RV':'University of California, Riverside',
+              'SD':'University of California, San Diego',
+              'SF':'University of California, San Francisco',
+              'SB':'University of California, Santa Barbara',
+              'SC':'University of California, Santa Cruz',
+              'ANR':'University of California Agriculture and Natural Resources',
+          }
+
+          def clean(v):
+              return ' '.join((v or '').replace('\xa0',' ').split())
+
+          def fetch(url, attempts=5):
+              last = None
+              for attempt in range(attempts):
+                  try:
+                      r = session.get(url, timeout=75)
+                      if r.status_code in (429,500,502,503,504):
+                          raise requests.HTTPError(f'HTTP {r.status_code}')
+                      r.raise_for_status()
+                      return r.text
+                  except Exception as exc:
+                      last = exc
+                      time.sleep(min(12, 1.5 * (2 ** attempt)))
+              raise last
+
+          def parse_index(html):
+              soup = BeautifulSoup(html,'html.parser')
+              rows=[]; seen=set()
+              for a in soup.find_all('a',href=True):
+                  m=re.search(r'/NCD/(?:NCDPDF(?:\.aspx)?\?ncdid=)?(\d+)(?:\.html)?',a.get('href',''),re.I)
+                  if not m: continue
+                  tid=m.group(1); title=clean(a.get_text(' ',strip=True))
+                  if not title or tid in seen or title.lower() in {'download pdf','permalink','request information'}: continue
+                  seen.add(tid); rows.append({'tech_id':tid,'title':title})
+              return rows
+
+          def level(tag):
+              if not isinstance(tag,Tag) or not re.fullmatch(r'h[1-6]',tag.name or ''): return None
+              return int(tag.name[1])
+
+          def find_heading(soup,names):
+              targets={clean(n).lower().rstrip(':') for n in names}
+              for tag in soup.find_all(re.compile(r'^h[1-6]$')):
+                  if clean(tag.get_text(' ',strip=True)).lower().rstrip(':') in targets: return tag
+              return None
+
+          def section(soup,names):
+              h=find_heading(soup,names)
+              if not h: return ''
+              base=level(h); parts=[]
+              for el in h.next_elements:
+                  if el is h: continue
+                  if isinstance(el,Tag):
+                      lv=level(el)
+                      if lv is not None and lv <= base: break
+                      if el.name in {'script','style','noscript'}: continue
+                      if el.name in {'p','li','td','div'}:
+                          text=clean(el.get_text(' ',strip=True))
+                          if text and not any(text in p or p in text for p in parts[-3:]): parts.append(text)
+              return clean(' | '.join(parts))
+
+          index_html=fetch(INDEX_URL)
+          records=parse_index(index_html)
+          if len(records)!=3769: raise SystemExit(f'bad index count {len(records)}')
+
+          campus_memberships={}
+          for code,name in CAMPUS_CODES.items():
+              ids={r['tech_id'] for r in parse_index(fetch(f'{INDEX_URL}?campus={code}'))}
+              for tid in ids: campus_memberships.setdefault(tid,[]).append(name)
+
+          selected=[r for i,r in enumerate(records) if i % 4 == SHARD]
+          extracted=datetime.now(timezone.utc).isoformat()
+          out=[]
+          for n,row in enumerate(selected,1):
+              tid=row['tech_id']; url=f'{BASE}/NCD/{tid}.html'
+              memberships=campus_memberships.get(tid,[])
+              rec={
+                  'tech_id':tid,'title':row['title'],'campus':memberships[0] if memberships else '',
+                  'campus_memberships':'; '.join(memberships),
+                  'campus_assignment_status':'catalog-filter-derived' if len(memberships)==1 else ('multiple-campus-membership' if len(memberships)>1 else 'detail-derived-or-manual'),
+                  'uc_case':'','availability_status':'catalog-listed; verify current status','patent_status':'',
+                  'brief_description':'','full_description':'','suggested_uses':'','advantages':'','state_of_development':'',
+                  'inventors':'','keywords':'','categories':'','related_cases':'','contact_name':'','contact_email':'',
+                  'source_url':url,'pdf_url':f'{BASE}/NCD/NCDPDF?ncdid={tid}','catalog_url':INDEX_URL,
+                  'fetch_status':'failed','fetch_error':'','extracted_at_utc':extracted,
+              }
+              try:
+                  soup=BeautifulSoup(fetch(url),'html.parser')
+                  page_title=clean(soup.title.get_text(' ',strip=True) if soup.title else '')
+                  h1=soup.find('h1')
+                  if h1 and clean(h1.get_text(' ',strip=True)): rec['title']=clean(h1.get_text(' ',strip=True))
+                  text=clean(soup.get_text(' ',strip=True))
+                  m=re.search(r'UC\s*Case\s+(.+?)(?=\s+(?:Abstract|Patent Status|Brief Description|Full Description|Suggested uses|Suggested Uses|Advantages|State Of Development|State of Development|Related Materials|Share This|Contact|Inventors|Keywords|Categorized As)|$)',text,re.I)
+                  if m: rec['uc_case']=clean(m.group(1)).strip(' /|')
+                  low=page_title.lower()
+                  if 'not currently available' in low or 'not available' in low: rec['availability_status']='not currently available'
+                  elif 'available technology for licensing' in low: rec['availability_status']='available technology for licensing'
+                  rec['patent_status']=section(soup,['Patent Status'])
+                  rec['brief_description']=section(soup,['Brief Description'])
+                  rec['full_description']=section(soup,['Full Description'])
+                  rec['suggested_uses']=section(soup,['Suggested uses','Suggested Uses','Applications'])
+                  rec['advantages']=section(soup,['Advantages','Features/Benefits'])
+                  rec['state_of_development']=section(soup,['State Of Development','State of Development'])
+                  rec['inventors']=section(soup,['Inventors'])
+                  rec['keywords']=section(soup,['Keywords'])
+                  rec['categories']=section(soup,['Categorized As'])
+                  rec['related_cases']=section(soup,['Related cases','Related Cases'])
+                  contact=section(soup,['Contact'])
+                  emails=list(dict.fromkeys(re.findall(r'[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}',contact,re.I)))
+                  rec['contact_email']='; '.join(emails)
+                  name=contact
+                  for email in emails: name=name.replace(email,'')
+                  name=re.sub(r'\btel\s*:\s*View Phone Number\.?','',name,flags=re.I)
+                  rec['contact_name']=clean(name.strip(' |;'))
+                  rec['fetch_status']='success'
+              except Exception as exc:
+                  rec['fetch_error']=f'{type(exc).__name__}: {exc}'[:500]
+              out.append(rec)
+              if n % 100 == 0: print(f'shard {SHARD}: {n}/{len(selected)}')
+              time.sleep(0.08)
+
+          fields=list(out[0].keys())
+          fn=OUT/f'ucop_detail_shard_{SHARD}.csv'
+          with fn.open('w',newline='',encoding='utf-8-sig') as f:
+              w=csv.DictWriter(f,fieldnames=fields); w.writeheader(); w.writerows(out)
+          summary={'shard':SHARD,'rows':len(out),'success':sum(r['fetch_status']=='success' for r in out),'failed':sum(r['fetch_status']=='failed' for r in out),'extracted_at_utc':extracted}
+          (OUT/f'ucop_detail_shard_{SHARD}_summary.json').write_text(json.dumps(summary,indent=2),encoding='utf-8')
+          print(json.dumps(summary,indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ucop-detail-shard-${{ matrix.shard }}
+          path: out/
+          if-no-files-found: error
+          retention-days: 1
