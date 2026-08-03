@@ -198,3 +198,5 @@ jobs:
           path: out/
           if-no-files-found: error
           retention-days: 1
+
+# One-time pull-request trigger for the UCOP catalog export.
