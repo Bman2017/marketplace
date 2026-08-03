@@ -1,10 +1,6 @@
 name: UCOP One-Time Technology Export
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/ucop-one-time-export.yml
   pull_request:
     branches: [main]
     paths:
@@ -16,7 +12,7 @@ permissions:
 jobs:
   export:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -24,179 +20,267 @@ jobs:
           python-version: '3.12'
       - name: Install parser dependencies
         run: python -m pip install --disable-pip-version-check requests beautifulsoup4
-      - name: Export UCOP catalog
+      - name: Export and enrich UCOP catalog
         shell: bash
         run: |
           python - <<'PY'
           import csv
           import json
           import re
+          import time
+          from collections import Counter
+          from concurrent.futures import ThreadPoolExecutor, as_completed
           from datetime import datetime, timezone
           from pathlib import Path
 
           import requests
-          from bs4 import BeautifulSoup
+          from bs4 import BeautifulSoup, Tag
 
           BASE = "https://techtransfer.universityofcalifornia.edu"
           INDEX_URL = f"{BASE}/Tech"
           OUT = Path("out")
           OUT.mkdir(exist_ok=True)
-
-          session = requests.Session()
-          session.headers.update({
+          HEADERS = {
               "User-Agent": "ArnsInnovations-UCOP-Public-Catalog-Indexer/1.0 (+public research data import)",
               "Accept": "text/html,application/xhtml+xml",
-          })
+          }
 
-          def fetch(url: str) -> str:
-              response = session.get(url, timeout=120)
-              response.raise_for_status()
-              return response.text
-
-          def parse_records(html: str):
-              soup = BeautifulSoup(html, "html.parser")
-              records = []
-              seen = set()
-              campus_names = {
-                  "Berkeley": "University of California, Berkeley",
-                  "Davis": "University of California, Davis",
-                  "Irvine": "University of California, Irvine",
-                  "Los Angeles": "University of California, Los Angeles",
-                  "Merced": "University of California, Merced",
-                  "Riverside": "University of California, Riverside",
-                  "San Diego": "University of California, San Diego",
-                  "San Francisco": "University of California, San Francisco",
-                  "Santa Barbara": "University of California, Santa Barbara",
-                  "Santa Cruz": "University of California, Santa Cruz",
-              }
-
-              for anchor in soup.find_all("a", href=True):
-                  match = re.search(r"/NCD/(?:NCDPDF(?:\.aspx)?\?ncdid=)?(\d+)(?:\.html)?", anchor.get("href", ""), re.I)
-                  if not match:
-                      continue
-                  tech_id = match.group(1)
-                  title = " ".join(anchor.get_text(" ", strip=True).split())
-                  if not title or tech_id in seen or title.lower() in {"download pdf", "permalink", "request information"}:
-                      continue
-                  seen.add(tech_id)
-                  row_text = ""
-                  parent = anchor.find_parent("tr") or anchor.parent
-                  if parent:
-                      row_text = " ".join(parent.get_text(" ", strip=True).split())
-                  campus = ""
-                  for needle, full in campus_names.items():
-                      if needle.lower() in row_text.lower():
-                          campus = full
-                          break
-                  records.append({"tech_id": tech_id, "title": title, "campus": campus})
-
-              if len(records) < 3000:
-                  pattern = re.compile(
-                      r"(?:Tech\s*ID[^0-9]{0,100})?(\d{4,6}).{0,1500}?href=[\"'][^\"']*/NCD/\1\.html[^\"']*[\"'][^>]*>(.*?)</a>",
-                      re.I | re.S,
-                  )
-                  for tech_id, raw_title in pattern.findall(html):
-                      if tech_id in seen:
-                          continue
-                      title = BeautifulSoup(raw_title, "html.parser").get_text(" ", strip=True)
-                      title = " ".join(title.split())
-                      if title:
-                          seen.add(tech_id)
-                          records.append({"tech_id": tech_id, "title": title, "campus": ""})
-              return records
-
-          html = fetch(INDEX_URL)
-          (OUT / "ucop_tech_index_raw.html").write_text(html, encoding="utf-8")
-          records = parse_records(html)
-
-          campus_codes = {
+          CAMPUS_CODES = {
               "BK": "University of California, Berkeley",
               "DA": "University of California, Davis",
               "IR": "University of California, Irvine",
               "LA": "University of California, Los Angeles",
-              "MR": "University of California, Merced",
+              "MC": "University of California, Merced",
               "RV": "University of California, Riverside",
               "SD": "University of California, San Diego",
               "SF": "University of California, San Francisco",
               "SB": "University of California, Santa Barbara",
               "SC": "University of California, Santa Cruz",
+              "ANR": "University of California Agriculture and Natural Resources",
           }
-          by_id = {row["tech_id"]: row for row in records}
-          campus_probe = {}
-          for code, campus_name in campus_codes.items():
-              best_ids = set()
-              best_url = ""
-              for url in (
-                  f"{BASE}/Tech?campus={code}",
-                  f"{BASE}/Default?RunSearch=true&campus={code}",
-                  f"{BASE}/default.aspx?campus={code}",
-              ):
-                  try:
-                      subset = parse_records(fetch(url))
-                  except Exception as exc:
-                      campus_probe.setdefault(code, []).append({"url": url, "error": str(exc)})
-                      continue
-                  ids = {row["tech_id"] for row in subset}
-                  campus_probe.setdefault(code, []).append({"url": url, "count": len(ids)})
-                  if 0 < len(ids) < len(records) and len(ids) > len(best_ids):
-                      best_ids = ids
-                      best_url = url
-              for tech_id in best_ids:
-                  if tech_id in by_id and not by_id[tech_id]["campus"]:
-                      by_id[tech_id]["campus"] = campus_name
-              if best_ids:
-                  campus_probe[code].append({"selected_url": best_url, "assigned": len(best_ids)})
 
-          extracted_at = datetime.now(timezone.utc).isoformat()
-          rows = []
-          for position, record in enumerate(records, start=1):
-              tech_id = record["tech_id"]
-              campus = record["campus"]
-              rows.append({
-                  "source_position": position,
-                  "tech_id": tech_id,
-                  "title": record["title"],
-                  "campus": campus,
-                  "campus_assignment_status": "catalog-filter-derived" if campus else "detail-enrichment-required",
-                  "source_url": f"{BASE}/NCD/{tech_id}.html",
+          def clean(value):
+              return " ".join((value or "").replace("\xa0", " ").split())
+
+          def fetch(url, attempts=4):
+              last = None
+              for attempt in range(attempts):
+                  try:
+                      response = requests.get(url, headers=HEADERS, timeout=60)
+                      if response.status_code in (429, 500, 502, 503, 504):
+                          raise requests.HTTPError(f"HTTP {response.status_code}")
+                      response.raise_for_status()
+                      return response.text
+                  except Exception as exc:
+                      last = exc
+                      if attempt + 1 < attempts:
+                          time.sleep(1.5 * (2 ** attempt))
+              raise last
+
+          def parse_index(html):
+              soup = BeautifulSoup(html, "html.parser")
+              rows = []
+              seen = set()
+              for anchor in soup.find_all("a", href=True):
+                  match = re.search(r"/NCD/(?:NCDPDF(?:\.aspx)?\?ncdid=)?(\d+)(?:\.html)?", anchor.get("href", ""), re.I)
+                  if not match:
+                      continue
+                  tech_id = match.group(1)
+                  title = clean(anchor.get_text(" ", strip=True))
+                  if not title or tech_id in seen or title.lower() in {"download pdf", "permalink", "request information"}:
+                      continue
+                  seen.add(tech_id)
+                  rows.append({"tech_id": tech_id, "title": title})
+              return rows
+
+          def heading_level(tag):
+              if not isinstance(tag, Tag) or not re.fullmatch(r"h[1-6]", tag.name or ""):
+                  return None
+              return int(tag.name[1])
+
+          def find_heading(soup, names):
+              targets = {clean(n).lower().rstrip(":") for n in names}
+              for tag in soup.find_all(re.compile(r"^h[1-6]$")):
+                  if clean(tag.get_text(" ", strip=True)).lower().rstrip(":") in targets:
+                      return tag
+              return None
+
+          def section_text(soup, names):
+              heading = find_heading(soup, names)
+              if not heading:
+                  return ""
+              level = heading_level(heading)
+              chunks = []
+              node = heading.next_sibling
+              while node is not None:
+                  if isinstance(node, Tag):
+                      next_level = heading_level(node)
+                      if next_level is not None and next_level <= level:
+                          break
+                      if node.name not in {"script", "style", "noscript"}:
+                          text = clean(node.get_text(" | ", strip=True))
+                          if text:
+                              chunks.append(text)
+                  node = node.next_sibling
+              return clean(" | ".join(chunks))
+
+          def list_section(soup, names):
+              text = section_text(soup, names)
+              return text
+
+          def parse_detail(row):
+              tech_id = row["tech_id"]
+              url = f"{BASE}/NCD/{tech_id}.html"
+              result = dict(row)
+              result.update({
+                  "uc_case": "",
+                  "availability_status": "catalog-listed; verify current status",
+                  "patent_status": "",
+                  "brief_description": "",
+                  "full_description": "",
+                  "suggested_uses": "",
+                  "advantages": "",
+                  "state_of_development": "",
+                  "inventors": "",
+                  "keywords": "",
+                  "categories": "",
+                  "related_cases": "",
+                  "contact_name": "",
+                  "contact_email": "",
+                  "source_url": url,
                   "pdf_url": f"{BASE}/NCD/NCDPDF?ncdid={tech_id}",
                   "catalog_url": INDEX_URL,
-                  "extracted_at_utc": extracted_at,
+                  "fetch_status": "failed",
+                  "fetch_error": "",
               })
+              try:
+                  html = fetch(url)
+                  soup = BeautifulSoup(html, "html.parser")
+                  page_title = clean(soup.title.get_text(" ", strip=True) if soup.title else "")
+                  h1 = soup.find("h1")
+                  if h1 and clean(h1.get_text(" ", strip=True)):
+                      result["title"] = clean(h1.get_text(" ", strip=True))
+
+                  all_text = clean(soup.get_text(" ", strip=True))
+                  id_case = re.search(rf"Tech\s*ID\s*:\s*{re.escape(tech_id)}(?:\s*/\s*UC\s*Case\s*([^#|]+?))?(?=\s+(?:Patent Status|Brief Description|Full Description|Suggested uses|Advantages|State Of Development|Related Materials|Share This|Contact|Inventors|Other Information)|$)", all_text, re.I)
+                  if id_case and id_case.group(1):
+                      result["uc_case"] = clean(id_case.group(1))
+
+                  lower_title = page_title.lower()
+                  if "not currently available" in lower_title or "not available" in lower_title:
+                      result["availability_status"] = "not currently available"
+                  elif "available technology for licensing" in lower_title:
+                      result["availability_status"] = "available technology for licensing"
+
+                  result["patent_status"] = section_text(soup, ["Patent Status"])
+                  result["brief_description"] = section_text(soup, ["Brief Description"])
+                  result["full_description"] = section_text(soup, ["Full Description"])
+                  result["suggested_uses"] = list_section(soup, ["Suggested uses", "Suggested Uses"])
+                  result["advantages"] = list_section(soup, ["Advantages"])
+                  result["state_of_development"] = section_text(soup, ["State Of Development", "State of Development"])
+                  result["inventors"] = list_section(soup, ["Inventors"])
+                  result["keywords"] = list_section(soup, ["Keywords"])
+                  result["categories"] = list_section(soup, ["Categorized As"])
+                  result["related_cases"] = list_section(soup, ["Related cases", "Related Cases"])
+
+                  contact_heading = find_heading(soup, ["Contact"])
+                  if contact_heading:
+                      contact_text = section_text(soup, ["Contact"])
+                      emails = []
+                      node = contact_heading.next_sibling
+                      while node is not None:
+                          if isinstance(node, Tag):
+                              lvl = heading_level(node)
+                              if lvl is not None and lvl <= heading_level(contact_heading):
+                                  break
+                              for a in node.find_all("a", href=True):
+                                  if a["href"].lower().startswith("mailto:"):
+                                      emails.append(a["href"].split(":", 1)[1].split("?", 1)[0])
+                          node = node.next_sibling
+                      result["contact_email"] = "; ".join(dict.fromkeys(emails))
+                      if contact_text:
+                          name = contact_text
+                          for email in emails:
+                              name = name.replace(email, "")
+                          name = re.sub(r"\btel\s*:\s*View Phone Number\.?", "", name, flags=re.I)
+                          result["contact_name"] = clean(name.strip(" |;"))
+
+                  result["fetch_status"] = "success"
+              except Exception as exc:
+                  result["fetch_error"] = f"{type(exc).__name__}: {exc}"[:500]
+              return result
+
+          index_html = fetch(INDEX_URL)
+          (OUT / "ucop_tech_index_raw.html").write_text(index_html, encoding="utf-8")
+          records = parse_index(index_html)
+          if len(records) != 3769:
+              raise SystemExit(f"Expected 3,769 index records, parsed {len(records)}")
+
+          by_id = {row["tech_id"]: row for row in records}
+          campus_probe = {}
+          campus_memberships = {}
+          for code, campus_name in CAMPUS_CODES.items():
+              url = f"{BASE}/Tech?campus={code}"
+              subset = parse_index(fetch(url))
+              ids = {row["tech_id"] for row in subset}
+              campus_probe[code] = {"campus": campus_name, "url": url, "count": len(ids)}
+              for tech_id in ids:
+                  campus_memberships.setdefault(tech_id, []).append(campus_name)
+
+          for row in records:
+              memberships = campus_memberships.get(row["tech_id"], [])
+              row["campus"] = memberships[0] if memberships else ""
+              row["campus_assignment_status"] = "catalog-filter-derived" if len(memberships) == 1 else ("multiple-campus-membership" if len(memberships) > 1 else "detail-derived-or-manual")
+              row["campus_memberships"] = "; ".join(memberships)
+
+          enriched = [None] * len(records)
+          with ThreadPoolExecutor(max_workers=10) as executor:
+              futures = {executor.submit(parse_detail, row): i for i, row in enumerate(records)}
+              for completed, future in enumerate(as_completed(futures), start=1):
+                  enriched[futures[future]] = future.result()
+                  if completed % 250 == 0:
+                      print(f"Enriched {completed}/{len(records)}")
+
+          extracted_at = datetime.now(timezone.utc).isoformat()
+          for position, row in enumerate(enriched, start=1):
+              row["source_position"] = position
+              row["extracted_at_utc"] = extracted_at
 
           fields = [
-              "source_position", "tech_id", "title", "campus", "campus_assignment_status",
-              "source_url", "pdf_url", "catalog_url", "extracted_at_utc"
+              "source_position", "tech_id", "uc_case", "title", "campus", "campus_memberships",
+              "campus_assignment_status", "availability_status", "patent_status", "brief_description",
+              "full_description", "suggested_uses", "advantages", "state_of_development", "inventors",
+              "keywords", "categories", "related_cases", "contact_name", "contact_email", "source_url",
+              "pdf_url", "catalog_url", "fetch_status", "fetch_error", "extracted_at_utc"
           ]
-          with (OUT / "ucop_technology_catalog.csv").open("w", newline="", encoding="utf-8-sig") as handle:
-              writer = csv.DictWriter(handle, fieldnames=fields)
+          with (OUT / "ucop_technology_catalog_enriched.csv").open("w", newline="", encoding="utf-8-sig") as handle:
+              writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
               writer.writeheader()
-              writer.writerows(rows)
+              writer.writerows(enriched)
 
+          status_counts = Counter(row["fetch_status"] for row in enriched)
+          campus_counts = Counter(row["campus"] or "Unassigned" for row in enriched)
+          unassigned = [{"tech_id": row["tech_id"], "title": row["title"]} for row in enriched if not row["campus"]]
+          multiple = [{"tech_id": row["tech_id"], "campuses": row["campus_memberships"]} for row in enriched if row["campus_assignment_status"] == "multiple-campus-membership"]
           summary = {
               "index_url": INDEX_URL,
-              "html_bytes": len(html.encode("utf-8")),
-              "record_count": len(rows),
-              "unique_tech_id_count": len({row["tech_id"] for row in rows}),
-              "campus_assigned_count": sum(bool(row["campus"]) for row in rows),
-              "campus_unassigned_count": sum(not bool(row["campus"]) for row in rows),
-              "first_record": rows[0] if rows else None,
-              "last_record": rows[-1] if rows else None,
+              "html_bytes": len(index_html.encode("utf-8")),
+              "record_count": len(enriched),
+              "unique_tech_id_count": len({row["tech_id"] for row in enriched}),
+              "detail_fetch_status": dict(status_counts),
+              "campus_counts": dict(campus_counts),
               "campus_probe": campus_probe,
+              "unassigned_records": unassigned,
+              "multiple_campus_records": multiple,
               "extracted_at_utc": extracted_at,
           }
           (OUT / "ucop_export_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
           print(json.dumps(summary, indent=2))
-
-          if len(rows) < 3700:
-              raise SystemExit(f"Parsed only {len(rows)} UCOP records; refusing incomplete export")
           PY
-      - name: Upload UCOP export artifact
+      - name: Upload enriched UCOP export artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ucop-technology-export
+          name: ucop-technology-export-enriched
           path: out/
           if-no-files-found: error
           retention-days: 1
-
-# One-time pull-request trigger for the UCOP catalog export.
