@@ -103,16 +103,15 @@ jobs:
           def section(soup,names):
               h=find_heading(soup,names)
               if not h: return ''
-              base=level(h); parts=[]
-              for el in h.next_elements:
-                  if el is h: continue
-                  if isinstance(el,Tag):
-                      lv=level(el)
+              base=level(h); parts=[]; node=h.next_sibling
+              while node is not None:
+                  if isinstance(node,Tag):
+                      lv=level(node)
                       if lv is not None and lv <= base: break
-                      if el.name in {'script','style','noscript'}: continue
-                      if el.name in {'p','li','td','div'}:
-                          text=clean(el.get_text(' ',strip=True))
-                          if text and not any(text in p or p in text for p in parts[-3:]): parts.append(text)
+                      if node.name not in {'script','style','noscript'}:
+                          text=clean(node.get_text(' | ',strip=True))
+                          if text: parts.append(text)
+                  node=node.next_sibling
               return clean(' | '.join(parts))
 
           index_html=fetch(INDEX_URL)
@@ -124,7 +123,7 @@ jobs:
               ids={r['tech_id'] for r in parse_index(fetch(f'{INDEX_URL}?campus={code}'))}
               for tid in ids: campus_memberships.setdefault(tid,[]).append(name)
 
-          selected=[r for i,r in enumerate(records) if i % 4 == SHARD]
+          selected=[r for r in records if int(r['tech_id']) % 4 == SHARD]
           extracted=datetime.now(timezone.utc).isoformat()
           out=[]
           for n,row in enumerate(selected,1):
@@ -179,7 +178,7 @@ jobs:
           fn=OUT/f'ucop_detail_shard_{SHARD}.csv'
           with fn.open('w',newline='',encoding='utf-8-sig') as f:
               w=csv.DictWriter(f,fieldnames=fields); w.writeheader(); w.writerows(out)
-          summary={'shard':SHARD,'rows':len(out),'success':sum(r['fetch_status']=='success' for r in out),'failed':sum(r['fetch_status']=='failed' for r in out),'extracted_at_utc':extracted}
+          summary={'shard':SHARD,'rows':len(out),'unique_ids':len({r["tech_id"] for r in out}),'success':sum(r['fetch_status']=='success' for r in out),'failed':sum(r['fetch_status']=='failed' for r in out),'extracted_at_utc':extracted}
           (OUT/f'ucop_detail_shard_{SHARD}_summary.json').write_text(json.dumps(summary,indent=2),encoding='utf-8')
           print(json.dumps(summary,indent=2))
           PY
