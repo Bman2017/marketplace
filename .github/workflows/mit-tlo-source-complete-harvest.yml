@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - harvest/mit-tlo-source-complete-2026-08-04
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
