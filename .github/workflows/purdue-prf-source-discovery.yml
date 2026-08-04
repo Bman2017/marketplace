@@ -1,0 +1,38 @@
+name: Purdue PRF Source Discovery
+
+on:
+  push:
+    branches:
+      - harvest/purdue-prf-source-complete-2026-08-04
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml
+
+      - name: Discover Purdue public catalog routes
+        run: python scripts/purdue_prf_discovery.py
+
+      - name: Upload discovery evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: purdue-prf-source-discovery-2026-08-04
+          path: purdue-discovery/
+          if-no-files-found: error
+          retention-days: 14
