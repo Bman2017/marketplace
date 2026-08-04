@@ -1,0 +1,62 @@
+name: Purdue PRF Source-Complete API Harvest
+
+on:
+  push:
+    branches:
+      - harvest/purdue-prf-source-complete-2026-08-04
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check requests
+
+      - name: Harvest Purdue authoritative public listing API
+        id: harvest
+        shell: bash
+        run: |
+          set +e
+          python scripts/purdue_prf_api_source_complete.py
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload source-complete catalog evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: purdue-prf-source-complete-api-harvest-2026-08-04
+          path: purdue-prf-api-harvest/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce source-completion gate
+        shell: bash
+        run: |
+          test "${{ steps.harvest.outputs.exit_code }}" = "0"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path('purdue-prf-api-harvest/purdue_prf_source_manifest.json').read_text())
+          assert manifest['source_complete'] is True, manifest
+          assert manifest['official_api_row_total'] == 1675, manifest
+          assert manifest['normalized_listing_records'] == 1675, manifest
+          assert manifest['unique_listing_identities'] == 1675, manifest
+          assert manifest['api_pages_with_receipts'] == 6, manifest
+          assert manifest['required_fields_missing'] == 0, manifest
+          print(json.dumps(manifest, indent=2))
+          PY
