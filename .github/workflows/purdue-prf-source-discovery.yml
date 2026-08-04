@@ -26,34 +26,12 @@ jobs:
       - name: Install dependencies
         run: python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml
 
-      - name: Apply execution-loop correction
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('scripts/purdue_prf_harvest.py')
-          text = path.read_text(encoding='utf-8')
-          old = '''    for index, (official_url, item) in [
-                  (idx, detail_results[idx]) for idx in sorted(detail_results)
-              ]:
-                  response = item[1] if False else None
-                  # Unpack after the intentionally explicit ordering above.
-                  official_url, api_item, detail_response = detail_results[index]
-          '''
-          new = '''    for index in sorted(detail_results):
-                  official_url, api_item, detail_response = detail_results[index]
-          '''
-          if old not in text:
-              raise SystemExit('Expected Purdue detail loop was not found')
-          path.write_text(text.replace(old, new), encoding='utf-8')
-          PY
-
       - name: Harvest Purdue public licensing catalog
         id: harvest
         shell: bash
         run: |
           set +e
-          python scripts/purdue_prf_harvest.py \
+          python scripts/purdue_prf_harvest_v2.py \
             --output-dir purdue-prf-harvest \
             --timeout 60 \
             --attempts 4 \
@@ -79,11 +57,11 @@ jobs:
           from pathlib import Path
           manifest = json.loads(Path('purdue-prf-harvest/purdue_prf_source_manifest.json').read_text())
           assert manifest['source_complete'] is True, manifest
-          assert manifest['official_live_total'] == 1675, manifest
-          assert manifest['unique_listing_identities'] == manifest['official_live_total'], manifest
-          assert manifest['unique_official_record_urls'] == manifest['official_live_total'], manifest
-          assert manifest['detail_pages_with_receipts'] == manifest['official_live_total'], manifest
+          assert manifest['official_api_row_total'] == 1675, manifest
+          assert manifest['normalized_listing_records'] == manifest['official_api_row_total'], manifest
+          assert manifest['unique_listing_identities'] == manifest['official_api_row_total'], manifest
           assert manifest['api_pages_with_receipts'] == manifest['api_pages_expected'], manifest
+          assert manifest['detail_pages_with_receipts'] == manifest['unique_official_record_urls'], manifest
           assert manifest['required_fields_missing'] == 0, manifest
           assert manifest['errors'] == 0, manifest
           print(json.dumps(manifest, indent=2))
