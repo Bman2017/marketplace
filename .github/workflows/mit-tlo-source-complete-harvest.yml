@@ -57,9 +57,12 @@ jobs:
           from pathlib import Path
           manifest = json.loads(Path('harvest-output/mit_tlo_source_manifest.json').read_text())
           assert manifest['source_complete'] is True, manifest
-          assert manifest['unique_case_numbers'] == manifest['official_count'], manifest
+          assert manifest['unique_listings'] == manifest['official_listing_count'], manifest
+          assert manifest['pages_with_receipts'] == manifest['expected_pages'], manifest
           assert manifest['page_errors'] == 0, manifest
           assert manifest['required_fields_missing'] == 0, manifest
-          assert manifest['duplicate_case_numbers'] == 0, manifest
+          assert manifest['invention_type_counts']['technology'] == 2753, manifest
+          assert manifest['invention_type_counts']['software'] == 31, manifest
+          assert manifest['invention_type_counts']['tangible_property'] == 26, manifest
           print(json.dumps(manifest, indent=2))
           PY
