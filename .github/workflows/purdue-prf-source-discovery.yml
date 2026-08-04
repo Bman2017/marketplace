@@ -29,10 +29,15 @@ jobs:
       - name: Discover Purdue public catalog routes
         run: python scripts/purdue_prf_discovery.py
 
+      - name: Probe Purdue public product search API
+        run: python scripts/purdue_prf_api_probe.py
+
       - name: Upload discovery evidence
         uses: actions/upload-artifact@v4
         with:
           name: purdue-prf-source-discovery-2026-08-04
-          path: purdue-discovery/
+          path: |
+            purdue-discovery/
+            purdue-api-probe/
           if-no-files-found: error
           retention-days: 14
