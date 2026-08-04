@@ -1,0 +1,57 @@
+name: UT System Source Inventory
+
+on:
+  push:
+    branches:
+      - harvest/ut-system-source-inventory-2026-08-04
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml
+
+      - name: Inventory UT System and harvest authorized public feeds
+        run: python scripts/ut_system_harvest.py
+
+      - name: Upload governed harvest checkpoint
+        uses: actions/upload-artifact@v4
+        with:
+          name: ut-system-source-inventory-2026-08-04
+          path: ut-system-output/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Validate checkpoint integrity
+        run: |
+          python - <<'PY'
+          import csv
+          import json
+          from pathlib import Path
+
+          root = Path('ut-system-output')
+          manifest = json.loads((root / 'ut_system_manifest.json').read_text())
+          rows = list(csv.DictReader((root / 'ut_system_records.csv').open()))
+          registry = list(csv.DictReader((root / 'ut_system_source_registry.csv').open()))
+          assert manifest['official_current_institution_count'] == 13, manifest
+          assert manifest['records_harvested'] == len(rows), manifest
+          assert len({row['dedup_key'] for row in rows}) == len(rows)
+          assert all(row['title'] and row['official_record_url'] for row in rows)
+          assert len({row['institution_code'] for row in registry}) == 13
+          print(json.dumps(manifest, indent=2))
+          PY
