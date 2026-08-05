@@ -1,0 +1,33 @@
+name: Capture Florida ExpertNet Browser Data
+
+on:
+  push:
+    branches:
+      - codex/harvest-florida-expertnet-20260805
+    paths:
+      - scripts/capture_expertnet_browser_data.py
+      - .github/workflows/capture-expertnet-browser-data.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install playwright
+      - run: playwright install chromium --with-deps
+      - name: Capture authoritative browser dataset
+        run: python scripts/capture_expertnet_browser_data.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: florida-expertnet-browser-capture-20260805
+          path: florida-expertnet-browser-capture
+          if-no-files-found: warn
