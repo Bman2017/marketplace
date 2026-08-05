@@ -1,0 +1,31 @@
+name: Probe Florida ExpertNet Search
+
+on:
+  push:
+    branches:
+      - codex/harvest-florida-expertnet-20260805
+    paths:
+      - scripts/probe_florida_expertnet_search.py
+      - .github/workflows/probe-florida-expertnet-search.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests beautifulsoup4
+      - name: Probe technology search
+        run: python scripts/probe_florida_expertnet_search.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: florida-expertnet-search-probe-20260805
+          path: florida-expertnet-search-probe
+          if-no-files-found: error
