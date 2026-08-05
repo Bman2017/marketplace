@@ -1,0 +1,31 @@
+name: Discover Florida ExpertNet
+
+on:
+  push:
+    branches:
+      - codex/harvest-florida-expertnet-20260805
+    paths:
+      - scripts/discover_florida_expertnet.py
+      - .github/workflows/discover-florida-expertnet.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests beautifulsoup4
+      - name: Discover public catalog routes
+        run: python scripts/discover_florida_expertnet.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: florida-expertnet-discovery-20260805
+          path: florida-expertnet-discovery
+          if-no-files-found: error
