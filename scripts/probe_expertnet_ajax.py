@@ -14,16 +14,19 @@ ajax_url = 'https://expertnet.org/scripts/ajaxSearchData.cfc?method=loadTabData'
 
 session = requests.Session()
 session.headers.update({
-    'User-Agent': 'Mozilla/5.0 (compatible; ArnsInnovations-FloridaExpertNet-Probe/1.2)',
+    'User-Agent': 'Mozilla/5.0 (compatible; ArnsInnovations-FloridaExpertNet-Probe/1.3)',
     'Accept-Language': 'en-US,en;q=0.9',
 })
-# Establish the same ColdFusion session and cookies as the public browser route.
 landing = session.get(page_url, timeout=90)
 landing.raise_for_status()
 (OUT / 'landing.html').write_text(landing.text, encoding='utf-8')
 
+# search.js calls parseFilterParams(new URLSearchParams(location.search)) and
+# POSTs that object unchanged after setting view. Preserve every query key,
+# including fuseaction, exactly as the public "All Technologies" link does.
 payload = {
     'prefilter': 'false',
+    'fuseaction': 'search.multiSearch',
     'view': 'technologies',
 }
 r = session.post(
@@ -65,6 +68,7 @@ for candidate in candidates:
 summary = {
     'landing_status': landing.status_code,
     'session_cookie_names': sorted(session.cookies.keys()),
+    'payload': payload,
     'http_status': r.status_code,
     'response_bytes': len(r.content),
     'content_type': r.headers.get('content-type', ''),
