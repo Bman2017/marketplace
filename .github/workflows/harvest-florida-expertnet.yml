@@ -1,0 +1,33 @@
+name: Harvest Florida ExpertNet
+
+on:
+  push:
+    branches:
+      - codex/harvest-florida-expertnet-20260805
+    paths:
+      - scripts/harvest_florida_expertnet.py
+      - .github/workflows/harvest-florida-expertnet.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install requests beautifulsoup4
+      - name: Harvest all Florida ExpertNet technology records
+        run: python scripts/harvest_florida_expertnet.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: florida-expertnet-source-complete-20260805
+          path: florida-expertnet-harvest
+          if-no-files-found: warn
+          retention-days: 90
