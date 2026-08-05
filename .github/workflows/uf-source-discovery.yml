@@ -23,7 +23,7 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml
-      - name: Configure low-rate browser session
+      - name: Configure UF browser session and URL variants
         shell: bash
         run: |
           python - <<'PY'
@@ -31,6 +31,10 @@ jobs:
           path = Path('scripts/uf_technology_publisher_harvest.py')
           text = path.read_text(encoding='utf-8')
 
+          text = text.replace(
+              'from urllib.parse import urljoin, urlparse',
+              'from urllib.parse import parse_qs, urljoin, urlparse'
+          )
           text = text.replace(
               '''USER_AGENT = (
               "Arns-Innovations-UF-Public-Catalog-Harvest/1.0 "
@@ -59,6 +63,32 @@ jobs:
           text = text.replace(old_rss, new_rss)
 
           text = text.replace(
+              '''        href = urljoin(page_url, anchor.get("href", ""))
+                  if "/tech/" not in urlparse(href).path:
+                      continue
+                  href = href.split("#", 1)[0].rstrip("/")
+          ''',
+              '''        href = urljoin(page_url, anchor.get("href", ""))
+                  parsed_href = urlparse(href)
+                  path_value = parsed_href.path.rstrip("/")
+                  if not ("/tech/" in parsed_href.path or path_value.lower() == "/tech"):
+                      continue
+                  href = href.split("#", 1)[0].rstrip("/")
+          '''
+          )
+
+          text = text.replace(
+              '''            "source_listing_id": urlparse(href).path.rstrip("/").split("/")[-1],
+          ''',
+              '''            "source_listing_id": (
+                      urlparse(href).path.rstrip("/").split("/")[-1]
+                      if urlparse(href).path.rstrip("/").lower() != "/tech"
+                      else clean((parse_qs(urlparse(href).query).get("title") or [""])[0])
+                  ),
+          '''
+          )
+
+          text = text.replace(
               '''    first_response = fetch(session, SEARCH)
           ''',
               '''    warmup = fetch(session, BASE, attempts=4, timeout=90.0)
@@ -67,7 +97,6 @@ jobs:
               first_response = fetch(session, SEARCH, attempts=5, timeout=90.0)
           '''
           )
-
           text = text.replace(
               '''        print(f"search_page={page_index} rows={len(page_rows)} unique={len(listings_by_url)}", flush=True)
           ''',
@@ -75,12 +104,10 @@ jobs:
                   time.sleep(0.45)
           '''
           )
-
           text = text.replace(
               'with ThreadPoolExecutor(max_workers=6) as pool:',
               'with ThreadPoolExecutor(max_workers=2) as pool:'
           )
-
           text = text.replace(
               '''        local = requests.Session(); local.headers.update(session.headers)
               response = fetch(local, url)
@@ -90,7 +117,6 @@ jobs:
               response = fetch(local, url, attempts=5, timeout=90.0)
           '''
           )
-
           path.write_text(text, encoding='utf-8')
           PY
       - name: Harvest UF public licensing catalog
