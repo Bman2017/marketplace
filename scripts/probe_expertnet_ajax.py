@@ -9,21 +9,32 @@ import requests
 
 OUT = Path('florida-expertnet-ajax-probe')
 OUT.mkdir(exist_ok=True)
-url = 'https://expertnet.org/scripts/ajaxSearchData.cfc?method=loadTabData'
+page_url = 'https://expertnet.org/index.cfm?prefilter=false&fuseaction=search.multiSearch&view=technologies'
+ajax_url = 'https://expertnet.org/scripts/ajaxSearchData.cfc?method=loadTabData'
+
+session = requests.Session()
+session.headers.update({
+    'User-Agent': 'Mozilla/5.0 (compatible; ArnsInnovations-FloridaExpertNet-Probe/1.2)',
+    'Accept-Language': 'en-US,en;q=0.9',
+})
+# Establish the same ColdFusion session and cookies as the public browser route.
+landing = session.get(page_url, timeout=90)
+landing.raise_for_status()
+(OUT / 'landing.html').write_text(landing.text, encoding='utf-8')
+
 payload = {
+    'prefilter': 'false',
     'view': 'technologies',
-    'prefilter': 'true',
 }
-r = requests.post(
-    url,
+r = session.post(
+    ajax_url,
     data=payload,
-    timeout=180,
+    timeout=240,
     headers={
-        'User-Agent': 'Mozilla/5.0 (compatible; ArnsInnovations-FloridaExpertNet-Probe/1.1)',
         'Accept': '*/*',
         'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
         'Origin': 'https://expertnet.org',
-        'Referer': 'https://expertnet.org/index.cfm?fuseaction=search.multiSearch&view=technologies&prefilter=true',
+        'Referer': page_url,
         'X-Requested-With': 'XMLHttpRequest',
     },
 )
@@ -32,8 +43,6 @@ raw = r.text
 (OUT / 'response.txt').write_text(raw, encoding='utf-8')
 
 candidates = [raw, raw.lstrip('\ufeff\r\n\t ')]
-# ColdFusion debugging or guards can wrap otherwise valid JSON. Preserve the raw
-# response and try only reversible extraction strategies.
 first_object = raw.find('{')
 last_object = raw.rfind('}')
 if first_object >= 0 and last_object > first_object:
@@ -54,6 +63,8 @@ for candidate in candidates:
         break
 
 summary = {
+    'landing_status': landing.status_code,
+    'session_cookie_names': sorted(session.cookies.keys()),
     'http_status': r.status_code,
     'response_bytes': len(r.content),
     'content_type': r.headers.get('content-type', ''),
