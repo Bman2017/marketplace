@@ -23,6 +23,37 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: python -m pip install --disable-pip-version-check requests beautifulsoup4 lxml
+      - name: Make RSS enrichment optional
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/uf_technology_publisher_harvest.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''    rss_response = fetch(session, RSS)
+              (out / "uf_rss.xml").write_bytes(rss_response.content)
+              rss_rows, rss_by_url = parse_rss(rss_response.content)
+          '''
+          new = '''    rss_rows = []
+              rss_by_url = {}
+              rss_errors = []
+              for rss_url in [urljoin(BASE, "rss"), RSS]:
+                  try:
+                      rss_response = fetch(session, rss_url, attempts=2, timeout=45.0)
+                      (out / "uf_rss.xml").write_bytes(rss_response.content)
+                      rss_rows, rss_by_url = parse_rss(rss_response.content)
+                      break
+                  except Exception as exc:
+                      rss_errors.append({"url": rss_url, "error": repr(exc)})
+              (out / "uf_rss_retrieval_status.json").write_text(
+                  json.dumps({"rows": len(rss_rows), "errors": rss_errors}, indent=2),
+                  encoding="utf-8",
+              )
+          '''
+          if old not in text:
+              raise SystemExit('Expected UF RSS block was not found')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
       - name: Harvest UF public licensing catalog
         id: harvest
         shell: bash
