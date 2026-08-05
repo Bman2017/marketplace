@@ -1,0 +1,30 @@
+name: U-M e-lucid Catalog Discovery
+
+on:
+  push:
+    branches:
+      - harvest/umich-source-complete-2026-08-05
+  workflow_dispatch:
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install browser tooling
+        run: |
+          python -m pip install --disable-pip-version-check playwright
+          python -m playwright install --with-deps chromium
+      - name: Discover public catalog APIs and product enumeration
+        run: python scripts/umich_elucid_discovery.py
+      - name: Upload discovery evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: umich-elucid-discovery-2026-08-05
+          path: umich-discovery/
+          retention-days: 14
+          compression-level: 9
