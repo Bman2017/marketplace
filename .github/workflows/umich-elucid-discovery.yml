@@ -1,9 +1,6 @@
 name: U-M e-lucid Catalog Discovery
 
 on:
-  push:
-    branches:
-      - harvest/umich-source-complete-2026-08-05
   workflow_dispatch:
 
 jobs:
